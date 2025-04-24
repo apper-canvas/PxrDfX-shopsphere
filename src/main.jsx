@@ -1,24 +1,16 @@
-import React from 'react'
-import ReactDOM from 'react-dom/client'
-import { BrowserRouter } from 'react-router-dom'
-import App from './App.jsx'
-import './index.css'
-
-// Import context providers
-import { AuthProvider } from './context/AuthContext'
-import { CartProvider } from './context/CartContext'
-import { ProductProvider } from './context/ProductContext'
+import React from 'react';
+import ReactDOM from 'react-dom/client';
+import { BrowserRouter } from 'react-router-dom';
+import { Provider } from 'react-redux';
+import App from './App';
+import './index.css';
+import { store } from './store';
 
 ReactDOM.createRoot(document.getElementById('root')).render(
-  <React.StrictMode>
+  // Do not use StrictMode with ApperSDK as it causes double initialization
+  <Provider store={store}>
     <BrowserRouter>
-      <AuthProvider>
-        <ProductProvider>
-          <CartProvider>
-            <App />
-          </CartProvider>
-        </ProductProvider>
-      </AuthProvider>
+      <App />
     </BrowserRouter>
-  </React.StrictMode>
-)
+  </Provider>
+);

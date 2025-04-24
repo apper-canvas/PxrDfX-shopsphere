@@ -1,138 +1,215 @@
-/**
- * Service for product-related operations
- */
 import apperService from './ApperService';
 import { TABLES } from '../config/apperConfig';
-import { PRODUCT_FIELDS, CATEGORY_FIELDS } from '../config/tableFields';
+import { PRODUCT_FIELDS } from '../config/tableFields';
+import { buildFilter } from '../utils/apperUtils';
 
 class ProductService {
-  // Fetch all products with filtering, pagination, and sorting
-  async fetchProducts(options = {}) {
+  // Get products with optional filtering and pagination
+  async getProducts(options = {}) {
     const {
-      filters = [],
       limit = 20,
       offset = 0,
-      orderBy = [{ field: 'CreatedOn', direction: 'desc' }],
-      featured = null,
-      category = null,
-      search = null
+      filter = {},
+      sortField = 'CreatedOn',
+      sortDirection = 'desc',
+      excludeIds = []
     } = options;
-
-    let productFilters = [...filters];
     
-    // Add featured filter if provided
-    if (featured !== null) {
-      productFilters.push({
-        field: 'featured',
-        operator: 'eq',
-        value: featured
-      });
-    }
-    
-    // Add category filter if provided
-    if (category) {
-      productFilters.push({
-        field: 'category',
-        operator: 'eq',
-        value: category
-      });
-    }
-    
-    // Add search filter if provided
-    if (search) {
-      productFilters.push({
-        field: 'Name',
-        operator: 'contains',
-        value: search
-      });
-    }
-    
-    const params = {
-      fields: PRODUCT_FIELDS,
-      filter: productFilters.length > 0 ? { and: productFilters } : undefined,
-      pagingInfo: { limit, offset },
-      orderBy
-    };
-    
-    return apperService.fetchRecords(TABLES.PRODUCT, params);
-  }
-
-  // Fetch a single product by ID
-  async fetchProductById(productId) {
-    const params = {
-      fields: PRODUCT_FIELDS,
-      filter: {
-        field: 'Id',
-        operator: 'eq',
-        value: productId
+    try {
+      // Build filter object
+      let filterObject = null;
+      
+      if (filter.field && filter.operator && filter.value !== undefined) {
+        // Direct filter object provided
+        filterObject = filter;
+      } else if (Object.keys(filter).length > 0) {
+        // Filter parameters provided as object
+        const filters = [];
+        
+        // Process known filter fields
+        if (filter.category) {
+          filters.push({
+            field: 'category',
+            operator: 'eq',
+            value: filter.category
+          });
+        }
+        
+        if (filter.query) {
+          filters.push({
+            field: 'Name',
+            operator: 'contains',
+            value: filter.query
+          });
+        }
+        
+        if (filter.featured !== undefined) {
+          filters.push({
+            field: 'featured',
+            operator: 'eq',
+            value: filter.featured
+          });
+        }
+        
+        if (filter.minPrice !== undefined) {
+          filters.push({
+            field: 'price',
+            operator: 'ge',
+            value: filter.minPrice
+          });
+        }
+        
+        if (filter.maxPrice !== undefined) {
+          filters.push({
+            field: 'price',
+            operator: 'le',
+            value: filter.maxPrice
+          });
+        }
+        
+        // If we have IDs to exclude
+        if (excludeIds.length > 0) {
+          filters.push({
+            field: 'Id',
+            operator: 'nin',
+            value: excludeIds
+          });
+        }
+        
+        filterObject = buildFilter(filters);
+      } else if (excludeIds.length > 0) {
+        // Only exclude IDs
+        filterObject = {
+          field: 'Id',
+          operator: 'nin',
+          value: excludeIds
+        };
       }
-    };
-    
-    const products = await apperService.fetchRecords(TABLES.PRODUCT, params);
-    return products.length > 0 ? products[0] : null;
+      
+      const params = {
+        fields: PRODUCT_FIELDS,
+        pagingInfo: {
+          limit,
+          offset
+        },
+        orderBy: [{
+          field: sortField,
+          direction: sortDirection
+        }]
+      };
+      
+      if (filterObject) {
+        params.filter = filterObject;
+      }
+      
+      const response = await apperService.fetchRecords(TABLES.PRODUCT, params);
+      
+      // Get total count for pagination
+      const countParams = { ...params };
+      delete countParams.pagingInfo;
+      countParams.countOnly = true;
+      
+      const countResponse = await apperService.fetchRecords(TABLES.PRODUCT, countParams);
+      const total = countResponse.count || response.length;
+      
+      return {
+        items: response,
+        total,
+        limit,
+        offset
+      };
+    } catch (error) {
+      console.error('Error getting products:', error);
+      throw error;
+    }
   }
-
-  // Fetch featured products
-  async fetchFeaturedProducts(limit = 8) {
-    return this.fetchProducts({
-      featured: true,
-      limit
-    });
+  
+  // Get product by ID
+  async getProductById(productId) {
+    try {
+      const params = {
+        fields: PRODUCT_FIELDS,
+        filter: {
+          field: 'Id',
+          operator: 'eq',
+          value: productId
+        }
+      };
+      
+      const products = await apperService.fetchRecords(TABLES.PRODUCT, params);
+      return products.length > 0 ? products[0] : null;
+    } catch (error) {
+      console.error(`Error getting product ${productId}:`, error);
+      throw error;
+    }
   }
-
-  // Fetch products by category
-  async fetchProductsByCategory(category, limit = 20, offset = 0) {
-    return this.fetchProducts({
-      category,
-      limit,
-      offset
-    });
-  }
-
-  // Fetch all categories
-  async fetchCategories() {
-    const params = {
-      fields: CATEGORY_FIELDS,
-      orderBy: [{ field: 'Name', direction: 'asc' }]
-    };
-    
-    return apperService.fetchRecords(TABLES.CATEGORY, params);
-  }
-
+  
   // Create a new product
   async createProduct(productData) {
-    const params = {
-      record: productData
-    };
-    
-    return apperService.createRecord(TABLES.PRODUCT, params);
+    try {
+      return await apperService.createRecord(TABLES.PRODUCT, {
+        record: productData
+      });
+    } catch (error) {
+      console.error('Error creating product:', error);
+      throw error;
+    }
   }
-
+  
   // Update an existing product
   async updateProduct(productId, productData) {
-    const params = {
-      record: productData
-    };
-    
-    return apperService.updateRecord(TABLES.PRODUCT, productId, params);
+    try {
+      return await apperService.updateRecord(TABLES.PRODUCT, productId, {
+        record: productData
+      });
+    } catch (error) {
+      console.error(`Error updating product ${productId}:`, error);
+      throw error;
+    }
   }
-
+  
   // Delete a product
   async deleteProduct(productId) {
-    return apperService.deleteRecord(TABLES.PRODUCT, productId);
-  }
-
-  // Search products by name
-  async searchProducts(query, limit = 20, offset = 0) {
-    if (!query) {
-      return this.fetchProducts({ limit, offset });
+    try {
+      return await apperService.deleteRecord(TABLES.PRODUCT, productId);
+    } catch (error) {
+      console.error(`Error deleting product ${productId}:`, error);
+      throw error;
     }
-    
-    return this.fetchProducts({
-      search: query,
-      limit,
-      offset
-    });
+  }
+  
+  // Get featured products
+  async getFeaturedProducts(limit = 4) {
+    try {
+      return this.getProducts({
+        limit,
+        filter: {
+          field: 'featured',
+          operator: 'eq',
+          value: true
+        }
+      });
+    } catch (error) {
+      console.error('Error getting featured products:', error);
+      throw error;
+    }
+  }
+  
+  // Search products by query
+  async searchProducts(query, limit = 20) {
+    try {
+      return this.getProducts({
+        limit,
+        filter: {
+          field: 'Name',
+          operator: 'contains',
+          value: query
+        }
+      });
+    } catch (error) {
+      console.error(`Error searching products with query "${query}":`, error);
+      throw error;
+    }
   }
 }
 

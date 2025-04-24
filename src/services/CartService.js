@@ -1,253 +1,193 @@
-/**
- * Service for shopping cart operations
- */
 import apperService from './ApperService';
 import { TABLES } from '../config/apperConfig';
 import { CART_ITEM_FIELDS } from '../config/tableFields';
+import userService from './UserService';
 import productService from './ProductService';
 
 class CartService {
-  // Fetch cart items for the current user
-  async fetchCartItems() {
-    // If user is authenticated, fetch from database
-    if (apperService.isAuthenticated()) {
-      const user = apperService.getCurrentUser();
+  // Get cart items for current user
+  async getCartItems() {
+    try {
+      if (!userService.isAuthenticated()) {
+        return [];
+      }
       
       const params = {
-        fields: CART_ITEM_FIELDS,
-        filter: {
-          field: 'Owner',
-          operator: 'eq',
-          value: user.id
-        }
+        fields: [...CART_ITEM_FIELDS, 'CreatedOn'],
+        orderBy: [{
+          field: 'CreatedOn',
+          direction: 'desc'
+        }]
       };
       
       const cartItems = await apperService.fetchRecords(TABLES.CART_ITEM, params);
       
       // Fetch product details for each cart item
-      const itemsWithProducts = await Promise.all(
-        cartItems.map(async (item) => {
-          const product = await productService.fetchProductById(item.product_id);
-          return {
-            ...item,
-            product
-          };
-        })
-      );
-      
-      return itemsWithProducts;
-    } 
-    // If user is not authenticated, get from local storage
-    else {
-      try {
-        const localCart = localStorage.getItem('cart');
-        const cartItems = localCart ? JSON.parse(localCart) : [];
-        
-        // Fetch product details for each cart item
-        const itemsWithProducts = await Promise.all(
-          cartItems.map(async (item) => {
-            const product = await productService.fetchProductById(item.product_id);
-            return {
-              ...item,
-              product
+      const enhancedCartItems = await Promise.all(cartItems.map(async (item) => {
+        if (item.product_id?.Id) {
+          const product = await productService.getProductById(item.product_id.Id);
+          if (product) {
+            item.product_id = {
+              ...item.product_id,
+              Name: product.Name,
+              price: product.price,
+              image: product.image
             };
-          })
-        );
-        
-        return itemsWithProducts;
-      } catch (error) {
-        console.error('Error getting cart from local storage:', error);
-        return [];
-      }
+            
+            // Use product price if cart item price is not set
+            if (!item.price) {
+              item.price = product.price;
+            }
+          }
+        }
+        return item;
+      }));
+      
+      return enhancedCartItems;
+    } catch (error) {
+      console.error('Error getting cart items:', error);
+      throw error;
     }
   }
-
+  
   // Add item to cart
   async addToCart(productId, quantity = 1) {
-    // If user is authenticated, add to database
-    if (apperService.isAuthenticated()) {
-      // Check if item already exists in cart
-      const cartItems = await this.fetchCartItems();
-      const existingItem = cartItems.find(item => item.product_id === productId);
+    try {
+      if (!userService.isAuthenticated()) {
+        throw new Error('User must be authenticated to add to cart');
+      }
       
-      if (existingItem) {
+      // Check if product exists
+      const product = await productService.getProductById(productId);
+      if (!product) {
+        throw new Error('Product not found');
+      }
+      
+      // Check if item already exists in cart
+      const existingItems = await this.getCartItemByProductId(productId);
+      
+      if (existingItems.length > 0) {
         // Update quantity of existing item
-        const newQuantity = existingItem.quantity + quantity;
-        return this.updateCartItem(existingItem.Id, newQuantity);
+        const existingItem = existingItems[0];
+        const newQuantity = (existingItem.quantity || 1) + quantity;
+        
+        return await this.updateCartItem(existingItem.Id, newQuantity);
       } else {
-        // Add new item to cart
-        const params = {
-          record: {
-            product_id: productId,
-            quantity
-          }
+        // Create new cart item
+        const cartItem = {
+          product_id: { Id: product.Id },
+          quantity,
+          price: product.price
         };
         
-        return apperService.createRecord(TABLES.CART_ITEM, params);
+        const createdItem = await apperService.createRecord(TABLES.CART_ITEM, {
+          record: cartItem
+        });
+        
+        // Add product details to the created item
+        createdItem.product_id = {
+          Id: product.Id,
+          Name: product.Name,
+          price: product.price,
+          image: product.image
+        };
+        
+        return createdItem;
       }
-    } 
-    // If user is not authenticated, add to local storage
-    else {
-      try {
-        const localCart = localStorage.getItem('cart');
-        const cartItems = localCart ? JSON.parse(localCart) : [];
-        
-        // Check if item already exists in cart
-        const existingItemIndex = cartItems.findIndex(item => item.product_id === productId);
-        
-        if (existingItemIndex >= 0) {
-          // Update quantity of existing item
-          cartItems[existingItemIndex].quantity += quantity;
-        } else {
-          // Add new item to cart
-          cartItems.push({
-            id: Date.now(),
-            product_id: productId,
-            quantity
-          });
-        }
-        
-        localStorage.setItem('cart', JSON.stringify(cartItems));
-        return cartItems;
-      } catch (error) {
-        console.error('Error adding to cart in local storage:', error);
-        throw error;
-      }
+    } catch (error) {
+      console.error(`Error adding product ${productId} to cart:`, error);
+      throw error;
     }
   }
-
+  
   // Update cart item quantity
   async updateCartItem(cartItemId, quantity) {
-    // If user is authenticated, update in database
-    if (apperService.isAuthenticated()) {
-      const params = {
-        record: {
-          quantity
-        }
-      };
-      
-      return apperService.updateRecord(TABLES.CART_ITEM, cartItemId, params);
-    } 
-    // If user is not authenticated, update in local storage
-    else {
-      try {
-        const localCart = localStorage.getItem('cart');
-        if (!localCart) return null;
-        
-        const cartItems = JSON.parse(localCart);
-        const itemIndex = cartItems.findIndex(item => item.id === cartItemId);
-        
-        if (itemIndex >= 0) {
-          cartItems[itemIndex].quantity = quantity;
-          localStorage.setItem('cart', JSON.stringify(cartItems));
-          return cartItems[itemIndex];
-        }
-        
-        return null;
-      } catch (error) {
-        console.error('Error updating cart item in local storage:', error);
-        throw error;
+    try {
+      if (!userService.isAuthenticated()) {
+        throw new Error('User must be authenticated to update cart');
       }
+      
+      const updatedItem = await apperService.updateRecord(TABLES.CART_ITEM, cartItemId, {
+        record: { quantity }
+      });
+      
+      // Get product details for the updated item
+      if (updatedItem.product_id?.Id) {
+        const product = await productService.getProductById(updatedItem.product_id.Id);
+        if (product) {
+          updatedItem.product_id = {
+            ...updatedItem.product_id,
+            Name: product.Name,
+            price: product.price,
+            image: product.image
+          };
+        }
+      }
+      
+      return updatedItem;
+    } catch (error) {
+      console.error(`Error updating cart item ${cartItemId}:`, error);
+      throw error;
     }
   }
-
+  
   // Remove item from cart
   async removeFromCart(cartItemId) {
-    // If user is authenticated, remove from database
-    if (apperService.isAuthenticated()) {
-      return apperService.deleteRecord(TABLES.CART_ITEM, cartItemId);
-    } 
-    // If user is not authenticated, remove from local storage
-    else {
-      try {
-        const localCart = localStorage.getItem('cart');
-        if (!localCart) return true;
-        
-        const cartItems = JSON.parse(localCart);
-        const updatedItems = cartItems.filter(item => item.id !== cartItemId);
-        
-        localStorage.setItem('cart', JSON.stringify(updatedItems));
-        return true;
-      } catch (error) {
-        console.error('Error removing item from cart in local storage:', error);
-        throw error;
+    try {
+      if (!userService.isAuthenticated()) {
+        throw new Error('User must be authenticated to remove from cart');
       }
+      
+      return await apperService.deleteRecord(TABLES.CART_ITEM, cartItemId);
+    } catch (error) {
+      console.error(`Error removing cart item ${cartItemId}:`, error);
+      throw error;
     }
   }
-
+  
   // Clear cart
   async clearCart() {
-    // If user is authenticated, delete all cart items from database
-    if (apperService.isAuthenticated()) {
-      const cartItems = await this.fetchCartItems();
+    try {
+      if (!userService.isAuthenticated()) {
+        return;
+      }
+      
+      // Get all cart items
+      const cartItems = await this.getCartItems();
       
       // Delete each cart item
-      await Promise.all(
-        cartItems.map(item => apperService.deleteRecord(TABLES.CART_ITEM, item.Id))
-      );
-      
-      return true;
-    } 
-    // If user is not authenticated, clear local storage
-    else {
-      try {
-        localStorage.removeItem('cart');
-        return true;
-      } catch (error) {
-        console.error('Error clearing cart from local storage:', error);
-        throw error;
+      for (const item of cartItems) {
+        await this.removeFromCart(item.Id);
       }
-    }
-  }
-
-  // Transfer guest cart to user account after login
-  async transferGuestCart() {
-    try {
-      const localCart = localStorage.getItem('cart');
-      if (!localCart) return;
-      
-      const cartItems = JSON.parse(localCart);
-      
-      // Add each item to user's cart in database
-      await Promise.all(
-        cartItems.map(item => this.addToCart(item.product_id, item.quantity))
-      );
-      
-      // Clear local cart after transfer
-      localStorage.removeItem('cart');
       
       return true;
     } catch (error) {
-      console.error('Error transferring guest cart:', error);
-      return false;
+      console.error('Error clearing cart:', error);
+      throw error;
     }
   }
-
-  // Calculate cart totals
-  async getCartTotals() {
-    const cartItems = await this.fetchCartItems();
-    
-    const subtotal = cartItems.reduce((total, item) => {
-      const price = item.product ? item.product.price : 0;
-      return total + (price * item.quantity);
-    }, 0);
-    
-    // Example tax calculation (adjust as needed)
-    const taxRate = 0.07; // 7%
-    const tax = subtotal * taxRate;
-    
-    // Example shipping calculation (adjust as needed)
-    const shipping = subtotal > 100 ? 0 : 10;
-    
-    const total = subtotal + tax + shipping;
-    
-    return {
-      subtotal,
-      tax,
-      shipping,
-      total,
-      itemCount: cartItems.reduce((count, item) => count + item.quantity, 0)
-    };
+  
+  // Get cart item by product ID
+  async getCartItemByProductId(productId) {
+    try {
+      if (!userService.isAuthenticated()) {
+        return [];
+      }
+      
+      const params = {
+        fields: CART_ITEM_FIELDS,
+        filter: {
+          field: 'product_id',
+          operator: 'eq',
+          value: { Id: productId }
+        }
+      };
+      
+      return await apperService.fetchRecords(TABLES.CART_ITEM, params);
+    } catch (error) {
+      console.error(`Error getting cart item for product ${productId}:`, error);
+      throw error;
+    }
   }
 }
 
